@@ -1,0 +1,8 @@
+# data and generated images: never commit CelebA
+data/
+# training outputs: checkpoints, logs, sample grids
+runs/
+*.pt
+# Python
+__pycache__/
+*.pyc
