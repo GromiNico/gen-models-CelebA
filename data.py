@@ -24,17 +24,3 @@ class CelebA64(Dataset):
     
     def __getitem__(self, i):
         return self.tf(Image.open(self.files[i]).convert('RGB'))
-
-
-"""
-example of use
-
-# train.py (after: from data import CelebA64; ROOT comes from a --data_root argument)
-# batch_size=128: images per training step (the standard DCGAN value).
-# shuffle=True: new random order each epoch, so batches are not correlated.
-# num_workers=4: 4 background processes decode JPEGs while the GPU trains (use 0 if it errors on Windows).
-# pin_memory=True: faster copies from RAM to the GPU.
-# drop_last=True: skip the last, smaller batch, which would make BatchNorm statistics noisy.
-
-loader = DataLoader(CelebA64(ROOT), batch_size=128, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
-"""

@@ -9,8 +9,12 @@ import csv
 import time
 from losses import d_loss_dcgan, g_loss_dcgan, c_loss_wgangp, gradient_penalty, g_loss_wgangp
 import torchvision.utils as vu
+from eval_fid import fid_eval, export, make_ref_stats
+import shutil
+
 
 Z_DIM = 100
+FID_REF = 'celeba64_ref' # name of the clean-fid statistics of the real images
 
 def main():
     #arguments
@@ -25,6 +29,10 @@ def main():
     p.add_argument("--lr", type = float)
     p.add_argument("--out", default = "/runs/dcgan")
     p.add_argument('--fresh', action = 'store_true')
+    p.add_argument('--fid_real', default = None)
+    p.add_argument('--fid_every', type = int, default = 1000)
+    p.add_argument('--fid_n', type = int, default = 2000)
+    p.add_argument('--fid_gen', default = 'data/fid_gen')
     
     args = p.parse_args()
     
@@ -41,7 +49,16 @@ def main():
     out.mkdir(parents = True, exist_ok = True)
     
     #3 Data: batches of bs,3,64,64 of [-1,1] images
-    loader = DataLoader(CelebA64(args.data_root, n = args.n), batch_size = args.bs, shuffle = True, num_workers = 2, pin_memory = (dev == 'cuda'), drop_last = True)
+    ds = CelebA64(args.data_root, n = args.n)
+    loader = DataLoader(ds, batch_size = args.bs, shuffle = True, num_workers = 2, pin_memory = (dev == 'cuda'), drop_last = True)
+    
+    if args.fid_real:
+        print("To compute FID, need a reference folder of real images")
+        # random subset of the whole dataset, CPU generator so the subset is the same on every machine
+        perm = torch.randperm(len(ds), generator = torch.Generator().manual_seed(0))[:args.fid_n]
+        export(perm, args.fid_real, ds)
+        print(f"{args.fid_n} random images saved at {args.fid_real}")
+        make_ref_stats(args.fid_real, FID_REF, device = dev)
     
     #initializing models and optimizers
     netG = G(Z_DIM).to(dev)
@@ -83,10 +100,16 @@ def main():
     #7 training loop
     
     log = open(out / 'log.csv', 'a' if step >0 else 'w', newline = '')
+    # header also needed when resuming from a checkpoint made before log_fid.csv existed
+    new_fid_log = step == 0 or not (out / 'log_fid.csv').exists()
+    log_fid = open(out / 'log_fid.csv', 'a' if step >0 else 'w', newline = '')
     writer = csv.writer(log)
-    
+    writer_fid = csv.writer(log_fid)
+
     if step == 0:
         writer.writerow(['step', 'lossC', 'lossG', 'w1_hat', 'gp'] if wgan else ['step', 'lossD', 'lossG', 'D_real', 'D_fake'])
+    if new_fid_log:
+        writer_fid.writerow(['step', 'fid'])
     
     for epoch in range(start_epoch, args.epochs):
         netD.train()
@@ -150,6 +173,14 @@ def main():
                     log.flush()
                     
                     print(f"epoch {epoch} step {step} loss critic {lossD.item():.2f} lossG {lossG.item():.2f} w1_hat {w1_hat.item():.2f} gp {g_p.item():.2f}")
+            
+            if args.fid_real and step%args.fid_every == 0:
+                score = fid_eval(ref_name = FID_REF, G = netG, out_dir = args.fid_gen, n = args.fid_n, z_dim = Z_DIM, device = dev, bs = min(128, args.fid_n))
+                
+                writer_fid.writerow([step, score])
+                log_fid.flush()
+                
+                print(f"FID at step {step}: {score:.2f}")
             step+=1
         
         netG.eval()
@@ -162,6 +193,7 @@ def main():
         
         print(f"epoch {epoch} done in {time.time()-t0:.0f} s")
     log.close()
+    log_fid.close()
 
 if __name__ == '__main__':
     main()

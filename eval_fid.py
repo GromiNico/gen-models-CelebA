@@ -21,8 +21,10 @@ def sample_to_dir(G, out_dir, n = 10000, z_dim = 100, bs = 500, device = 'cpu'):
     
     g = torch.Generator(device=device).manual_seed(0)
     for k in range(0, n, bs):
-        # generates bs vectors following normal distribution in z_dim dimensions
-        z = torch.randn(bs, z_dim, device = device, generator = g)
+        # generates b vectors following normal distribution in z_dim dimensions
+        # the last batch is smaller so that exactly n images are saved
+        b = min(bs, n - k)
+        z = torch.randn(b, z_dim, device = device, generator = g)
         
         x = (G(z).clamp(-1,1)*0.5 + 0.5)
         
@@ -33,6 +35,22 @@ def sample_to_dir(G, out_dir, n = 10000, z_dim = 100, bs = 500, device = 'cpu'):
     
     G.train()
 
+def make_ref_stats(fid_real, name, device = 'cpu'):
+    # Inception statistics of the real images, computed once and reused at every fid_eval call
+    if fid.test_stats_exists(name, mode = 'clean'):
+        fid.remove_custom_stats(name, mode = 'clean')
+    fid.make_custom_stats(name, fid_real, mode = 'clean', num_workers = 0, device = device)
+
+def fid_eval(ref_name, G, out_dir, n = 10_000, z_dim = 100, bs = 128, device = 'cpu'):
+
+    out = Path(out_dir)
+    if out.exists():
+        shutil.rmtree(out)
+
+    sample_to_dir(G,out_dir = out_dir, n = n, z_dim = z_dim, device = device, bs = bs)
+    score = fid.compute_fid(out_dir, dataset_name = ref_name, dataset_split = 'custom', mode = 'clean', num_workers = 0, device = device)
+
+    return score
 
 def export(idx, out, ds):
     out = Path(out)
@@ -43,7 +61,8 @@ def export(idx, out, ds):
     out.mkdir(parents = True, exist_ok = True)
     print(f"Saving real images at {out}")
     for j, i in enumerate(idx):
-        vu.save_image(ds[i], out / f"{j:5d}.png")        
+        # ds returns images in [-1,1], save_image expects [0,1]
+        vu.save_image(ds[i]*0.5 + 0.5, out / f"{j:05d}.png")
 
 class VAEDecoder(nn.Module):
     def __init__(self, vae):
@@ -66,7 +85,7 @@ def main():
     
     #creating the folder of real images
     ds = CelebA64("data/img_align_celeba", n = args.n)
-    perm = torch.randperm(len(ds), generator = torch.Generator(device = dev).manual_seed(0))
+    perm = torch.randperm(len(ds), generator = torch.Generator().manual_seed(0))
     export(perm, args.real, ds)
     print(f"{args.n} random images saved at {args.real}")
     
