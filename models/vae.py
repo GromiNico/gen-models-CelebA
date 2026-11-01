@@ -35,6 +35,6 @@ class VAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         
-        z = mu + torch.rand_like(mu) * torch.exp(0.5*logvar)
+        z = mu + torch.randn_like(mu) * torch.exp(0.5*logvar)
         
         return self.decode(z), mu, logvar

@@ -14,7 +14,7 @@ def main():
     #arguments
     p = argparse.ArgumentParser()
     p.add_argument("--model", default = "vae")
-    p.add_argument("--data_root", required=True)
+    p.add_argument("--data_root", default = "data/img_align_celeba")
     p.add_argument("--n", type = int, default =None)
     p.add_argument("--epochs", type=int, default = 10)
     p.add_argument("--bs", type = int, default = 128)
