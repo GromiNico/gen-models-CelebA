@@ -7,7 +7,7 @@ from data import CelebA64
 from models.dcgan import G, D
 import csv
 import time
-from losses import d_loss_dcgan, g_loss_dcgan
+from losses import d_loss_dcgan, g_loss_dcgan, c_loss_wgangp, gradient_penalty, g_loss_wgangp
 import torchvision.utils as vu
 
 Z_DIM = 100
@@ -15,16 +15,24 @@ Z_DIM = 100
 def main():
     #arguments
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default = "vae")
-    p.add_argument("--data_root", required=True)
-    p.add_argument("--n", type = int, default =None)
+    p.add_argument("--model", default = "dcgan", choices = ['dcgan', 'wgangp'])
+    p.add_argument('--n_critic', type = int, default = 5)
+    p.add_argument('--lam', type = float, default = 10.0)
+    p.add_argument("--data_root", default = 'data/img_align_celeba')
+    p.add_argument("--n", type = int, default = None)
     p.add_argument("--epochs", type=int, default = 10)
     p.add_argument("--bs", type = int, default = 128)
-    p.add_argument("--lr", type = float, default = 1e-3)
-    p.add_argument("--out", default = "/runs/vae")
+    p.add_argument("--lr", type = float)
+    p.add_argument("--out", default = "/runs/dcgan")
     p.add_argument('--fresh', action = 'store_true')
     
     args = p.parse_args()
+    
+    wgan = args.model == 'wgangp'
+    if args.lr == None:
+        args.lr = 1e-4 if wgan else 2e-4
+    if args.out == None:
+        args.out = f"runs/{args.model}"
     
     #setup, seed, GPU, out dir
     seed_all(0)
@@ -37,13 +45,14 @@ def main():
     
     #initializing models and optimizers
     netG = G(Z_DIM).to(dev)
-    netD = D(norm = 'bn').to(dev)
+    netD = D(norm = 'ln' if wgan else 'bn').to(dev)
     
     netG.apply(weights_init)    
     netD.apply(weights_init)
+    betas = (0.0, 0.9) if wgan else (0.5, 0.999)
     
-    optG = torch.optim.Adam(netG.parameters(), lr = args.lr, betas=(0.5,0.999))
-    optD = torch.optim.Adam(netD.parameters(), lr = args.lr, betas=(0.5,0.999))
+    optG = torch.optim.Adam(netG.parameters(), lr = args.lr, betas=betas)
+    optD = torch.optim.Adam(netD.parameters(), lr = args.lr, betas=betas)
     
     #5 Fixed latent vectors so sample grids from different epochs are comparable
     z_path = out/ "z_eval.pt"
@@ -77,41 +86,70 @@ def main():
     writer = csv.writer(log)
     
     if step == 0:
-        writer.writerow(['step', 'lossD', 'lossG', 'D_real', 'D_fake'])
+        writer.writerow(['step', 'lossC', 'lossG', 'w1_hat', 'gp'] if wgan else ['step', 'lossD', 'lossG', 'D_real', 'D_fake'])
     
     for epoch in range(start_epoch, args.epochs):
         netD.train()
         netG.train()
         t0 = time.time()
         
-        for x in loader:
+        for i, x in enumerate(loader):
             x = x.to(dev, non_blocking = True)
             
-            d_real = netD(x)
+            if not wgan:
+                d_real = netD(x)
             
-            z = torch.randn(x.size(0), Z_DIM, device = dev)
+                z = torch.randn(x.size(0), Z_DIM, device = dev)
             
-            fake = netG(z)
-            d_fake = netD(fake.detach())
+                fake = netG(z)
+                d_fake = netD(fake.detach())
             
-            lossD = d_loss_dcgan(d_real, d_fake)
-            optD.zero_grad(set_to_none= True)
-            lossD.backward()
-            optD.step()
+                lossD = d_loss_dcgan(d_real, d_fake)
+                optD.zero_grad(set_to_none= True)
+                lossD.backward()
+                optD.step()
             
-            lossG = g_loss_dcgan(netD(fake))
-            optG.zero_grad(set_to_none=True)
-            lossG.backward()
-            optG.step()
+                lossG = g_loss_dcgan(netD(fake))
+                optG.zero_grad(set_to_none=True)
+                lossG.backward()
+                optG.step()
+            
+            else: #wgangp
+                z = torch.randn(x.size(0), Z_DIM, device = dev)
+                
+                with torch.no_grad():
+                    fake = netG(z)
+                lossD, w1_hat, g_p = c_loss_wgangp(netD, x, fake, lam = args.lam)
+                optD.zero_grad(set_to_none = True)
+                
+                lossD.backward()
+                optD.step()
+                
+                if (i+1)%args.n_critic != 0:
+                    continue
+                
+                z = torch.randn(x.size(0), Z_DIM, device = dev)
+                lossG = g_loss_wgangp(netD(netG(z)))
+                optG.zero_grad(set_to_none = True)
+                
+                lossG.backward()
+                optG.step()
             
             if step%100==0:
-                p_real = torch.sigmoid(d_real).mean().item()
-                p_fake = torch.sigmoid(d_fake).mean().item()
+                if not wgan:
+                    p_real = torch.sigmoid(d_real).mean().item()
+                    p_fake = torch.sigmoid(d_fake).mean().item()
+                    
+                    writer.writerow([step, lossD.item(), lossG.item(), p_real, p_fake])
+                    log.flush()
+                    
+                    print(f"epoch {epoch} step {step} lossD {lossD:.2f} lossG {lossG:.2f} D_real {p_real:.2f} D_fake {p_fake:.2f}")
                 
-                writer.writerow([step, lossD.item(), lossG.item(), p_real, p_fake])
-                log.flush()
-                
-                print(f"epoch {epoch} step {step} lossD {lossD:.2f} lossG {lossG:.2f} D_real {p_real:.2f} D_fake {p_fake:.2f}")
+                else:
+                    writer.writerow([step, lossD.item(), lossG.item(), w1_hat.item(), g_p.item()])
+                    log.flush()
+                    
+                    print(f"epoch {epoch} step {step} loss critic {lossD.item():.2f} lossG {lossG.item():.2f} w1_hat {w1_hat.item():.2f} gp {g_p.item():.2f}")
             step+=1
         
         netG.eval()

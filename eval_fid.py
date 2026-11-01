@@ -6,6 +6,7 @@ import torch.nn as nn
 import argparse, shutil
 from models.vae import VAE
 from data import CelebA64
+from models.dcgan import G, D
 
 fid.EXTENSIONS = {"png"}
 
@@ -58,6 +59,7 @@ def main():
     p.add_argument('--real', required = True)
     p.add_argument('--gen', default = 'data/fid_gen')
     p.add_argument('--n', type=int, default = 10_000)
+    p.add_argument('--model', choices = ['vae', 'dcgan'], default = 'vae')
     
     args = p.parse_args()
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -69,17 +71,25 @@ def main():
     print(f"{args.n} random images saved at {args.real}")
     
     # Loading the model from last ckpt
-    vae = VAE(z=128).to(dev)
     ck = torch.load(args.ckpt, map_location = dev)
-    vae.load_state_dict(ck['model'])
-    print(f"model loaded, {ck['epochs']} done")
+    
+    if args.model == "vae":
+        vae, z_dim = VAE(z=128).to(dev), 128
+        vae.load_state_dict(ck['model'])
+        gen = VAEDecoder(vae)
+        print(f"VAE generator loaded, {ck['epoch']} done")
+    
+    elif args.model == "dcgan":
+        gen, z_dim = G(z = 100).to(dev), 100
+        gen.load_state_dict(ck['netG'])
+        print(f"DCGAN generator loaded, {ck['epoch']} done")
     
     #deleting last generated attemps
     shutil.rmtree(args.gen, ignore_errors = True)
     
     #Sampling from the model distribution
     print("Sampling from the model distribution")
-    sample_to_dir(VAEDecoder(vae), args.gen, n = args.n, z_dim = 128, device = dev)
+    sample_to_dir(gen, args.gen, n = args.n, z_dim = z_dim, device = dev)
     
     score = fid.compute_fid(args.real, args.gen, mode = 'clean', num_workers = 0, device = dev)
     print(f"FID {score:.2f} computed on {args.n} images after epoch {ck['epoch']}")
