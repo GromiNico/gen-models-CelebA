@@ -48,7 +48,7 @@ def fid_eval(ref_name, G, out_dir, n = 10_000, z_dim = 100, bs = 128, device = '
         shutil.rmtree(out)
 
     sample_to_dir(G,out_dir = out_dir, n = n, z_dim = z_dim, device = device, bs = bs)
-    score = fid.compute_fid(out_dir, dataset_name = ref_name, dataset_split = 'custom', mode = 'clean', num_workers = 0, device = device)
+    score = fid.compute_fid(out_dir, dataset_name = ref_name, dataset_split = 'custom', mode = 'clean', num_workers = 4, device = device)
 
     return score
 
