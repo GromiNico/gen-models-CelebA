@@ -55,7 +55,7 @@ def main():
     p.add_argument("--warmup", type = int, default = 2)  # epochs with the identity attack only
     p.add_argument("--attacks", nargs = '+', default = TRAIN_ATTACKS, choices = TRAIN_ATTACKS)
     p.add_argument("--bs", type = int, default = 128)
-    p.add_argument("--lr", type = float, default = 1e-3)
+    p.add_argument("--lr", type = float)  # default 1e-3; when resuming, overrides the saved learning rate
     p.add_argument("--workers", type = int, default = 2)
     p.add_argument("--out", default = "runs/hidden")
     p.add_argument('--fresh', action = 'store_true')
@@ -89,7 +89,7 @@ def main():
 
     E = Encoder(args.k, alpha = args.alpha).to(dev)
     W = Extractor(args.k).to(dev)
-    opt = torch.optim.Adam(list(E.parameters()) + list(W.parameters()), lr = args.lr)
+    opt = torch.optim.Adam(list(E.parameters()) + list(W.parameters()), lr = args.lr or 1e-3)
 
     #resume from last checkpoint if it exists
     start_epoch, step = 0, 0
@@ -100,6 +100,11 @@ def main():
         E.load_state_dict(ck['E']); W.load_state_dict(ck['W']); opt.load_state_dict(ck['opt'])
         start_epoch, step = ck['epoch'] + 1, ck['step']
         print(f"Resuming from {ckpt_path}, {start_epoch} epochs already done.")
+        # the optimizer state restores the saved learning rate; --lr replaces it (e.g. a 10x drop for the last epochs)
+        if args.lr is not None:
+            for group in opt.param_groups:
+                group['lr'] = args.lr
+    print(f"learning rate {opt.param_groups[0]['lr']:g}")
 
     if start_epoch >= args.epochs:
         print(f"Nothing to do, already trained for {start_epoch} epochs, raise epochs or add --fresh to start again")

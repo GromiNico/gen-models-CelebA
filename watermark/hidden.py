@@ -42,6 +42,27 @@ class Extractor(nn.Module):
         return self.fc(self.net(x).flatten(1))
 
 
+# W'(x) = P (W(x) - mu) with P = Sigma^{-1/2} (whiten.py): on clean images its outputs have mean 0, unit
+# variance and no correlation. P is symmetric, so bit i of W' still reads bit i of the encoder's messages.
+class Whitened(nn.Module):
+    def __init__(self, W, mu, P):
+        super().__init__()
+        self.W = W
+        self.register_buffer('mu', mu)
+        self.register_buffer('P', P)
+
+    def forward(self, x):
+        return (self.W(x) - self.mu) @ self.P.T
+
+
+# frozen W' from the file saved by whiten.py
+def load_whitened(path, device='cpu'):
+    ck = torch.load(path, map_location = device)
+    W = Extractor(ck['cfg']['k'])
+    W.load_state_dict(ck['W'])
+    return Whitened(W, ck['mu'], ck['P']).to(device).eval().requires_grad_(False)
+
+
 def random_msg(b, k=32, device='cpu', generator=None):
     return torch.randint(0, 2, (b, k), device = device, generator = generator).float()
 
