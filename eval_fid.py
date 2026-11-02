@@ -7,7 +7,9 @@ import argparse, shutil
 from models.vae import VAE
 from data import CelebA64
 from models.dcgan import G, D
+import os
 
+FID_WORKERS = 0 if os.name == 'nt' else 4
 fid.EXTENSIONS = {"png"}
 
 @torch.no_grad()
@@ -48,7 +50,7 @@ def fid_eval(ref_name, G, out_dir, n = 10_000, z_dim = 100, bs = 128, device = '
         shutil.rmtree(out)
 
     sample_to_dir(G,out_dir = out_dir, n = n, z_dim = z_dim, device = device, bs = bs)
-    score = fid.compute_fid(out_dir, dataset_name = ref_name, dataset_split = 'custom', mode = 'clean', num_workers = 4, device = device)
+    score = fid.compute_fid(out_dir, dataset_name = ref_name, dataset_split = 'custom', mode = 'clean', num_workers = FID_WORKERS, device = device)
 
     return score
 
@@ -110,7 +112,7 @@ def main():
     print("Sampling from the model distribution")
     sample_to_dir(gen, args.gen, n = args.n, z_dim = z_dim, device = dev)
     
-    score = fid.compute_fid(args.real, args.gen, mode = 'clean', num_workers = 0, device = dev)
+    score = fid.compute_fid(args.real, args.gen, mode = 'clean', num_workers = FID_WORKERS, device = dev)
     print(f"FID {score:.2f} computed on {args.n} images after epoch {ck['epoch']}")
 
 if __name__ == '__main__':
