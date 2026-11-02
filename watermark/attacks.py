@@ -31,6 +31,13 @@ def jpeg(x, q):
     return from_uint8(torch.from_numpy(np.stack(out)).permute(0, 3, 1, 2)).to(x.device)
 
 
+# differentiable approximation of JPEG at quality q (kornia, pip install kornia); used only for its gradient
+def jpeg_diff(x, q):
+    import kornia
+    quality = torch.full((x.size(0),), float(q), device = x.device)
+    return kornia.enhance.jpeg_codec_differentiable((x + 1)/2, quality)*2 - 1
+
+
 # keep a fraction p of the area; resize=True scales the crop back to the input size
 def crop(x, p, center=False, resize=True):
     H, W = x.shape[-2:]
@@ -59,13 +66,18 @@ def brightness(x, c):
 
 TRAIN_ATTACKS = ['identity', 'jpeg', 'crop', 'resize', 'noise', 'brightness']
 
-def train_attack(x, name):
+# jpeg_grad: gradient of the JPEG attack, 'ste' (straight-through: the identity) or 'kornia' (differentiable JPEG,
+# which tells E or G_theta which image components survive compression)
+def train_attack(x, name, jpeg_grad='ste'):
     u = random.uniform
     if name == 'identity':
         return x
     if name == 'jpeg':
-        # straight-through: forward is the real JPEG, backward is the identity
-        return x + (jpeg(x, random.randint(50, 95)) - x).detach()
+        q = random.randint(50, 95)
+        # the forward pass is always the real JPEG; only the backward pass depends on jpeg_grad. kornia's rounding
+        # surrogate x + (round(x) - x)^3 has derivative 3u^2, 1/4 on average: x4 keeps JPEG batches at the scale of the others
+        x_d = x if jpeg_grad == 'ste' else 4*jpeg_diff(x, q)
+        return x_d + (jpeg(x, q) - x_d).detach()
     if name == 'crop':
         return crop(x, u(0.3, 1))
     if name == 'resize':

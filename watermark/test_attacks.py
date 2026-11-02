@@ -38,6 +38,24 @@ def test_jpeg_straight_through():
     assert torch.allclose(x.grad, torch.ones_like(x))
 
 
+def test_jpeg_kornia_gradient():
+    try:
+        import kornia  # noqa: F401
+    except ImportError:
+        print("  (kornia not installed, test skipped)")
+        return
+    x = smooth_images().requires_grad_(True)
+    random.seed(0)
+    y = train_attack(x, 'jpeg', jpeg_grad = 'kornia')
+    random.seed(0)
+    q = random.randint(50, 95)
+    # same forward as the straight-through version (the real JPEG), but a gradient that is not the identity
+    assert torch.allclose(y, jpeg(x, q), atol = 1e-6)
+    y.sum().backward()
+    assert torch.isfinite(x.grad).all() and x.grad.abs().sum() > 0
+    assert not torch.allclose(x.grad, torch.ones_like(x))
+
+
 def test_jpeg_quality_order():
     x = quantize(smooth_images(8))
     err = {q: ((jpeg(x, q) - x)**2).mean().item() for q in [90, 70, 50]}
@@ -131,7 +149,7 @@ def main():
 
     torch.manual_seed(0)
     random.seed(0)
-    tests = [test_train_attacks_shape_range_grad, test_jpeg_straight_through, test_jpeg_quality_order,
+    tests = [test_train_attacks_shape_range_grad, test_jpeg_straight_through, test_jpeg_kornia_gradient, test_jpeg_quality_order,
              test_eval_attacks_uint8_grid, test_eval_crop_sizes, test_eval_noise_std, test_brightness,
              test_none_is_quantization, test_attack_random_pick, test_extractor_reads_every_eval_attack]
     failed = 0

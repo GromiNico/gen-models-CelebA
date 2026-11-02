@@ -54,6 +54,7 @@ def main():
     p.add_argument("--epochs", type = int, default = 10)
     p.add_argument("--warmup", type = int, default = 2)  # epochs with the identity attack only
     p.add_argument("--attacks", nargs = '+', default = TRAIN_ATTACKS, choices = TRAIN_ATTACKS)
+    p.add_argument('--jpeg_grad', default = 'ste', choices = ['ste', 'kornia'])  # gradient of the train-time JPEG
     p.add_argument("--bs", type = int, default = 128)
     p.add_argument("--lr", type = float)  # default 1e-3; when resuming, overrides the saved learning rate
     p.add_argument("--workers", type = int, default = 2)
@@ -104,7 +105,7 @@ def main():
         if args.lr is not None:
             for group in opt.param_groups:
                 group['lr'] = args.lr
-    print(f"learning rate {opt.param_groups[0]['lr']:g}")
+    print(f"learning rate {opt.param_groups[0]['lr']:g}, alpha {args.alpha}, JPEG gradient {args.jpeg_grad}")
 
     if start_epoch >= args.epochs:
         print(f"Nothing to do, already trained for {start_epoch} epochs, raise epochs or add --fresh to start again")
@@ -150,7 +151,7 @@ def main():
             m = random_msg(x.size(0), args.k, device = dev)
             xw = E(x, m)
             a = random.choice(names)  # one attack for the whole batch
-            logits = W(train_attack(xw, a))
+            logits = W(train_attack(xw, a, args.jpeg_grad))
             loss = msg_loss(logits, m)
             opt.zero_grad(set_to_none = True)
             loss.backward()
