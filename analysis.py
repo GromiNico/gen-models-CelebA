@@ -17,6 +17,7 @@ def main():
     p.add_argument("--runs", default="runs")         # parent of runs/<model>/; /kaggle/working/runs on Kaggle
     p.add_argument("--window", type=int, default=5)  # rolling mean over 5 log rows = 500 generator steps
     p.add_argument("--out", default="figs")          # folder for the figure, linked from the README
+    p.add_argument("--min_step", type=int, default=1)  # log rows and FIDs before this step are left out: at step 0 the critic is untrained
     args = p.parse_args()
 
     col, label = SIGNAL[args.model]                  # e.g. ("w1_hat", "critic estimate of W1")
@@ -25,7 +26,9 @@ def main():
 
     # ---- 1. Load the two logs written during training ----
     log = pd.read_csv(run / "log.csv")               # one row every 100 generator steps: step, losses, signal
+    log = log[log["step"] >= args.min_step]          # default 1: drops the step-0 signal, before the smoothing
     fids = pd.read_csv(run / "log_fid.csv")              # one row every --fid_every generator steps: step, fid
+    fids = fids[fids["step"] >= args.min_step]       # default 1: drops the step-0 FID, measured before any training
 
     # ---- 2. Smooth the signal ----
     log["signal_s"] = log[col].rolling(args.window, min_periods=1).mean()

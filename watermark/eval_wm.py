@@ -1,10 +1,4 @@
-# Step 6: evaluate watermarked generators G_theta against the original G0 on one fixed set of latents reused for
-# every model: quality (PSNR and LPIPS against G0, optional FID) and robustness (bit accuracy and detection rate at
-# FPR 1e-6 under each eval attack), plus the false-alarm rate on clean real and clean G0 images under the same attacks.
-# Run from the repo root (patterns are expanded here, so they also work in cmd.exe):
-#   python -m watermark.eval_wm --g_ckpt runs/wgangp/last.pt --wprime runs/hidden_ep12/w_prime.pt
-#       --models "runs/finetune_final/lam*/G_theta.pt" "runs/finetune_calib/lam*/G_theta.pt" --keep runs/finetune_final/lam3/G_theta.pt
-# Writes to --out: results.csv (one row per model), attacks_kept.csv, tradeoff.png, hist_M.png, grid.png, z_eval.pt
+#run from the repo root: python -m watermark.eval_wm --g_ckpt ... --wprime ... --models "runs/finetune/lam*/G_theta.pt" --keep ...
 import argparse
 import csv
 import glob
@@ -26,20 +20,20 @@ ATTACKS = ['none'] + EVAL_2DAY
 COLS = ['psnr', 'lpips'] + [f'acc_{a}' for a in ATTACKS] + [f'tpr_{a}' for a in ATTACKS] + ['fid']
 
 
-# fine-tuned generator, its lambda, and whether it was fine-tuned through the attack layer
+# loads a fine-tuned generator, its lambda and whether it was fine-tuned through the attacks
 def load_theta(path, dev):
     ck = torch.load(path, map_location = dev)
     netG = G(Z_DIM).to(dev)
     netG.load_state_dict(ck['netG'])
     attack = ck.get('attack')
-    if attack is None:  # saved before finetune_gen.py stored the flag: read it from the sweep's summary.csv
+    if attack is None:  # older checkpoints don't store it, it is read from the summary.csv of their sweep
         s = Path(path).parent.parent / 'summary.csv'
         rows = [r for r in csv.DictReader(open(s)) if r['lam'] and float(r['lam']) == ck['lam']] if s.exists() else []
         attack = rows[-1]['attack'] == 'True' if rows else None
     return netG.eval().requires_grad_(False), ck['lam'], attack
 
 
-# M (bits matching the key) under every attack, for a stream of image batches; images rounded to uint8 by the attacks
+# M (bits matching the key) under every eval attack, for a stream of image batches
 @torch.no_grad()
 def match_counts(batches, Wp, key):
     M = {a: [] for a in ATTACKS}
@@ -49,10 +43,12 @@ def match_counts(batches, Wp, key):
     return {a: torch.cat(v) for a, v in M.items()}
 
 
+# bit accuracy and detection rate (M >= tau) under every attack
 def robustness(M, k, tau):
     return {**{f'acc_{a}': (M[a]/k).mean().item() for a in ATTACKS}, **{f'tpr_{a}': (M[a] >= tau).float().mean().item() for a in ATTACKS}}
 
 
+# PSNR and LPIPS of G_theta against G0 on the same latents
 @torch.no_grad()
 def quality(Gt, z, x0, perc, bs):
     p, l = 0.0, 0.0
@@ -63,6 +59,7 @@ def quality(Gt, z, x0, perc, bs):
     return {'psnr': p/len(z), 'lpips': l/len(z)}
 
 
+# bit accuracy against PSNR, one point per lambda, without attack and under JPEG 50
 def plot_tradeoff(path, rows, keep_label):
     import matplotlib
     matplotlib.use('Agg')
@@ -77,7 +74,7 @@ def plot_tradeoff(path, rows, keep_label):
             ax.plot([r['psnr'] for r in pts], [r[f'acc_{a}'] for r in pts], color = c, lw = 1.5, marker = mk, ms = 7, label = name)
             others = sorted([r for r in rows if r['attack'] != flag], key = lambda r: r['psnr'])
             for r in pts:
-                # label on the side away from the other series at the same PSNR: above right, or below left
+                # label on the side away from the other series at the same PSNR: above right or below left
                 other = np.interp(r['psnr'], [o['psnr'] for o in others], [o[f'acc_{a}'] for o in others]) if others else -1
                 above = r[f'acc_{a}'] >= other
                 ax.annotate(f"λ={r['lam']:g}", (r['psnr'], r[f'acc_{a}']), textcoords = 'offset points', xytext = (6, 5) if above else (-6, -13),
@@ -101,37 +98,38 @@ def plot_tradeoff(path, rows, keep_label):
     plt.close(fig)
 
 
+# histogram of M on clean and watermarked images against Bin(k, 1/2)
 def plot_hist(path, counts, k, tau):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     x = list(range(k + 1))
-    fig, ax = plt.subplots(figsize = (6.5, 3.8))
-    ax.plot(x, binom_pmf(k), color = '#52514e', lw = 1.2, ls = '--', label = 'Bin(k, 1/2)')
+    fig, ax = plt.subplots(figsize = (7.5, 4.2))
+    ax.plot(x, binom_pmf(k), color = '#52514e', lw = 1.2, ls = '--', label = f'Bin({k}, 1/2): bits matching the key by pure chance')
     for (name, M), c in zip(counts.items(), ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']):
         f = torch.bincount(M.long(), minlength = k + 1).double()/len(M)
-        f[f == 0] = float('nan')  # empty bins left out of the log scale
+        f[f == 0] = float('nan')  # empty bins are not drawn on the log scale
         ax.plot(x, f, color = c, lw = 1.8, marker = 'o', ms = 4, label = name)
-    ax.axvline(tau, color = '#52514e', lw = 0.8, ls = ':')
-    ax.text(tau, 1.5e-4, f'tau = {tau}, FPR 1e-6 ', fontsize = 8, color = '#52514e', va = 'bottom', ha = 'right')
+    ax.axvline(tau, color = '#52514e', lw = 0.8, ls = ':', label = f'detection threshold: M >= {tau} (false-positive rate 1e-6)')
     ax.set_yscale('log')
     ax.set_ylim(1e-4, 1)
-    ax.set_xlabel('M = decoded bits matching the key')
-    ax.set_ylabel('fraction of images')
+    ax.set_xlabel(f'M = number of the {k} decoded bits that match the secret key')
+    ax.set_ylabel('fraction of images (log scale)')
     ax.grid(alpha = 0.25)
     ax.spines[['top', 'right']].set_visible(False)
-    ax.legend(fontsize = 8, frameon = False, loc = 'upper left', bbox_to_anchor = (1.01, 1))
+    ax.legend(fontsize = 8, frameon = False, loc = 'upper center', bbox_to_anchor = (0.5, -0.17), ncol = 2)
     fig.savefig(path, dpi = 150, bbox_inches = 'tight')
     plt.close(fig)
 
 
 def main():
+    #arguments
     p = argparse.ArgumentParser()
     p.add_argument('--g_ckpt', required = True)  # the original generator G0
-    p.add_argument('--wprime', required = True)  # whiten.py output; the key is read from key.pt next to it
-    p.add_argument('--models', nargs = '+', required = True)  # G_theta.pt files or glob patterns
+    p.add_argument('--wprime', required = True)  # w_prime.pt from whiten.py, the key is read from key.pt next to it
+    p.add_argument('--models', nargs = '+', required = True)  # G_theta.pt files or patterns like "runs/finetune/lam*/G_theta.pt"
     p.add_argument('--keep', default = None)  # the chosen G_theta: attack table, grid, histogram (and FID)
-    p.add_argument('--n', type = int, default = 2000)  # fixed latents per model (the guide uses 10,000 on GPU)
+    p.add_argument('--n', type = int, default = 2000)  # number of fixed latents per model (10000 on GPU)
     p.add_argument('--n_psnr', type = int, default = 1000)
     p.add_argument('--fid', action = 'store_true')  # FID of G0 and of --keep (slow on CPU)
     p.add_argument('--fid_ref', default = 'celeba64_ref')  # clean-fid statistics made by train_gan.py --fid_real
@@ -143,13 +141,15 @@ def main():
     p.add_argument('--out', default = 'runs/eval_wm')
     args = p.parse_args()
 
+    #2 setup, GPU, out dir and the list of models
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     out = Path(args.out)
     out.mkdir(parents = True, exist_ok = True)
-    keep = str(Path(args.keep)) if args.keep else None  # normalised, so runs/a and runs\a are the same model
+    keep = str(Path(args.keep)) if args.keep else None  # normalized so that runs/a and runs\a are the same model
     paths = sorted({str(Path(q)) for pat in args.models for q in glob.glob(pat)} | ({keep} if keep else set()))
     assert paths, f"no G_theta found for {args.models}"
 
+    #3 frozen G0 and W', key, detection threshold and LPIPS
     G0 = load_G(args.g_ckpt, dev)
     Wp = load_whitened(args.wprime, dev)
     k = Wp.P.shape[0]
@@ -157,7 +157,7 @@ def main():
     tau = threshold(k, 1e-6)
     perc = lpips.LPIPS(net = args.perc, verbose = False).to(dev).eval().requires_grad_(False)
 
-    # the same latents for every model and every evaluation run
+    #4 the same latents for every model and every evaluation run
     z_path = out / 'z_eval.pt'
     z = torch.load(z_path) if z_path.exists() else torch.randn(10000, Z_DIM, generator = torch.Generator().manual_seed(2024))
     torch.save(z, z_path)
@@ -166,13 +166,14 @@ def main():
         x0 = torch.cat([G0(z[i:i+args.bs]) for i in range(0, len(z), args.bs)])
     print(f"{len(paths)} models, {len(z)} latents, key m* = {''.join(str(int(b)) for b in key)}, tau = {tau}/{k} (FPR 1e-6)")
 
-    # clean images: false alarms of the detector under each attack
+    #5 clean real and G0 images: false alarms of the detector under each attack
     real = CelebA64(args.data_root, n = TEST_START + args.n, start = TEST_START)
     M_real = match_counts((x.to(dev) for x in DataLoader(real, batch_size = args.bs, num_workers = args.workers)), Wp, key)
     M_g0 = match_counts((x0[i:i+args.bs] for i in range(0, len(x0), args.bs)), Wp, key)
     rows = [{'label': 'clean real (test split)', 'lam': None, 'attack': None, **robustness(M_real, k, tau)},
             {'label': 'G0 (not watermarked)', 'lam': None, 'attack': None, **robustness(M_g0, k, tau)}]
 
+    #6 every fine-tuned generator: quality against G0 and robustness
     models, M_keep = {}, None
     for path in paths:
         Gt, lam, attack = load_theta(path, dev)
@@ -187,6 +188,7 @@ def main():
         if path == keep:
             keep_label, M_keep = label, M
 
+    #7 results file and trade-off figure
     def write_results():
         with open(out / 'results.csv', 'w', newline = '') as f:
             w = csv.writer(f)
@@ -196,8 +198,9 @@ def main():
     write_results()
     plot_tradeoff(out / 'tradeoff.png', [r for r in rows if r['lam'] is not None], keep_label if M_keep is not None else None)
 
+    #8 kept model: attack table, histogram of M, image grid and FID
     if M_keep is not None:
-        # attack table of the kept model, with the false-alarm rate of clean images under the same attack
+        # attack table, with the false alarm rate of clean images under the same attack
         r = next(r for r in rows if r['label'] == keep_label)
         lines = [f"{'attack':10s} {'bit acc':>8s} {'TPR':>6s} {'FPR real':>9s} {'FPR G0':>8s}   ({keep_label}, {len(z)} latents, tau = {tau})"]
         with open(out / 'attacks_kept.csv', 'w', newline = '') as f:
@@ -209,9 +212,12 @@ def main():
                 lines.append(f"{a:10s} {vals[0]:8.3f} {vals[1]:6.3f} {vals[2]:9.4f} {vals[3]:8.4f}")
         print('\n'.join(lines))
 
-        plot_hist(out / 'hist_M.png', {'clean real images': M_real['none'], 'clean G0 images': M_g0['none'],
-                                       f'watermarked ({keep_label})': M_keep['none'], f'watermarked + JPEG 50': M_keep['jpeg50']}, k, tau)
-        # G0(z), G_theta(z) and the amplified difference 10*|G_theta(z) - G0(z)| for 8 latents
+        how = f"λ = {r['lam']:g}" + (', fine-tuned through attacks' if r['attack'] else '')
+        plot_hist(out / 'hist_M.png', {'real photos, no watermark': M_real['none'],
+                                       'original generator G0, no watermark': M_g0['none'],
+                                       f'watermarked generator ({how})': M_keep['none'],
+                                       'same watermarked images after JPEG 50': M_keep['jpeg50']}, k, tau)
+        # grid of 8 latents: G0(z), G_theta(z) and the amplified difference 10*|G_theta(z) - G0(z)|
         with torch.no_grad():
             xt = models[keep](z[:8])
         vu.save_image(torch.cat([x0[:8]*0.5 + 0.5, xt*0.5 + 0.5, (10*(xt - x0[:8]).abs()).clamp(0, 1)]), out / 'grid.png', nrow = 8)

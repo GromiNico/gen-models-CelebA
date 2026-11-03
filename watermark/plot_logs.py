@@ -1,18 +1,18 @@
-# Training curves of a train_hidden.py run: held-out bit accuracy per attack (real and generated images) and PSNR.
-#   python -m watermark.plot_logs runs/hidden                 # writes runs/hidden/curves.png
-#   python -m watermark.plot_logs runs/hidden --warmup 1 --show   # run trained with --warmup 1, also opens a window
+#run from the repo root: python -m watermark.plot_logs runs/hidden (add --show to open a window)
+#training curves of a train_hidden.py run: held-out bit accuracy per attack and PSNR, saved in curves.png
 import argparse
 from pathlib import Path
 import pandas as pd
 
 ATTACKS = ['none', 'jpeg80', 'jpeg50', 'crop0.5', 'noise0.05', 'combined']
-COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300']  # an attack keeps its colour in every panel
+COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300']  # an attack keeps its color in every panel
 
 
 def main():
+    #arguments
     p = argparse.ArgumentParser()
     p.add_argument('dir')
-    p.add_argument('--warmup', type = int, default = 2)  # the --warmup of the training run, to mark when attacks started
+    p.add_argument('--warmup', type = int, default = 2)  # --warmup of the training run, to mark when the attacks started
     p.add_argument('--show', action = 'store_true')
     args = p.parse_args()
 
@@ -23,9 +23,10 @@ def main():
 
     d = Path(args.dir)
     df = pd.read_csv(d / 'log_eval.csv')
-    switch = df.loc[df.epoch >= args.warmup, 'step'].min()  # first eval after the attacks were switched on
+    switch = df.loc[df.epoch >= args.warmup, 'step'].min()  # first evaluation after the attacks were turned on
     sets = [t for t in ['real', 'gen'] if f'{t}_none' in df]
 
+    # one panel of bit accuracy per held-out set (real, generated), and a last panel for the PSNR
     fig, axes = plt.subplots(1, len(sets) + 1, figsize = (5*(len(sets) + 1), 3.8))
     for ax, t in zip(axes, sets):
         for a, c in zip(ATTACKS, COLORS):
@@ -52,6 +53,7 @@ def main():
     fig.legend(*axes[0].get_legend_handles_labels(), loc = 'upper center', ncol = 7, fontsize = 9, frameon = False, bbox_to_anchor = (0.5, 1.07))
     fig.savefig(d / 'curves.png', dpi = 150, bbox_inches = 'tight')
 
+    # last 3 evaluations printed as a table
     cols = ['step', 'epoch'] + [f'{t}_{c}' for t in sets for c in ['psnr', 'clean'] + ATTACKS]
     print(df[cols].tail(3).round(3).to_string(index = False))
     print(f"saved {d / 'curves.png'}")

@@ -1,5 +1,5 @@
-# Tests for the detection test (detect.py) and the whitening layer (whiten.py, hidden.Whitened). Run from the repo root:
-#   python -m watermark.test_whiten
+#run from the repo root: python -m watermark.test_whiten
+#tests of the detection test (detect.py) and of the whitening (whiten.py, hidden.Whitened)
 import tempfile
 from pathlib import Path
 import torch
@@ -9,7 +9,7 @@ from watermark.whiten import fit_whitening, null_check
 
 
 def test_thresholds():
-    # the table of the guide (step 5): smallest tau with FPR <= target, and its exact FPR
+    # table of the guide (step 5): smallest tau with FPR <= target, and its exact FPR
     for k, target, tau, exact in [(32, 1e-3, 26, 2.7e-4), (32, 1e-6, 30, 1.2e-7), (48, 1e-3, 36, 3.6e-4), (48, 1e-6, 41, 3.1e-7)]:
         assert threshold(k, target) == tau, (k, target, threshold(k, target))
         assert abs(fpr(tau, k) - exact)/exact < 0.05, (k, tau, fpr(tau, k))

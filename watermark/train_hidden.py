@@ -1,7 +1,4 @@
-# Step 3: train the HiDDeN encoder E and extractor W jointly through the attack layer.
-# Run from the repo root, for example on Kaggle:
-#   python -m watermark.train_hidden --data_root <celeba jpgs> --out /kaggle/working/hidden --g_ckpt /kaggle/working/dcgan/last.pt
-# Resumes from <out>/last.pt unless --fresh. Logs: log.csv (training batches), log_eval.csv (held-out bit accuracy per attack).
+#run from the repo root: python -m watermark.train_hidden --data_root ... --out ... --g_ckpt ...
 import argparse
 import csv
 import random
@@ -17,18 +14,19 @@ from watermark.attacks import TRAIN_ATTACKS, EVAL_ATTACKS, EVAL_2DAY, train_atta
 from watermark.hidden import Encoder, Extractor, random_msg, msg_loss, bit_acc, psnr
 
 Z_DIM = 100
-N_TRAIN = 162770  # official CelebA split: images 1-162770 are train, the next ones validation
+N_TRAIN = 162770  # official CelebA split: the first 162770 images for training, the next ones for validation
 EVAL_COLS = ['psnr', 'clean'] + list(EVAL_ATTACKS)
 
 
+# loads a frozen generator from a train_gan.py checkpoint
 def load_G(path, dev):
     netG = G(Z_DIM).to(dev)
     netG.load_state_dict(torch.load(path, map_location = dev)['netG'])
     return netG.eval().requires_grad_(False)
 
 
-# held-out bit accuracy under every eval attack, PSNR of x_w against x, and the clean-image control
-# (W on the same images without watermark, against the same messages: should stay at 0.5)
+# bit accuracy on the held-out images under every eval attack, PSNR of the watermarked images, and 'clean':
+# W on the same images without watermark, against the same messages, should stay at 0.5
 @torch.no_grad()
 def evaluate(E, W, x, m, bs=250):
     E.eval(); W.eval()
@@ -45,10 +43,11 @@ def evaluate(E, W, x, m, bs=250):
 
 
 def main():
+    #arguments
     p = argparse.ArgumentParser()
     p.add_argument("--data_root", default = 'data/img_align_celeba')
     p.add_argument("--n", type = int, default = N_TRAIN)  # first n images for training
-    p.add_argument("--n_val", type = int, default = 1000)  # held-out images taken after the train split
+    p.add_argument("--n_val", type = int, default = 1000)  # held-out images, taken after the training split
     p.add_argument("--k", type = int, default = 32)
     p.add_argument("--alpha", type = float, default = 0.05)
     p.add_argument("--epochs", type = int, default = 10)
@@ -56,23 +55,23 @@ def main():
     p.add_argument("--attacks", nargs = '+', default = TRAIN_ATTACKS, choices = TRAIN_ATTACKS)
     p.add_argument('--jpeg_grad', default = 'ste', choices = ['ste', 'kornia'])  # gradient of the train-time JPEG
     p.add_argument("--bs", type = int, default = 128)
-    p.add_argument("--lr", type = float)  # default 1e-3; when resuming, overrides the saved learning rate
+    p.add_argument("--lr", type = float)  # 1e-3 by default, when resuming it replaces the saved learning rate
     p.add_argument("--workers", type = int, default = 2)
     p.add_argument("--out", default = "runs/hidden")
     p.add_argument('--fresh', action = 'store_true')
     p.add_argument('--eval_every', type = int, default = 500)
-    p.add_argument('--g_ckpt', default = None)  # generator checkpoint (train_gan.py last.pt): adds a generated held-out set
-    p.add_argument('--g_frac', type = float, default = 0.0)  # fraction of each training batch replaced by generator samples
+    p.add_argument('--g_ckpt', default = None)  # train_gan.py checkpoint, adds a held-out set of generated images
+    p.add_argument('--g_frac', type = float, default = 0.0)  # fraction of each training batch replaced by generated images
     args = p.parse_args()
 
-    #setup, seed, GPU, out dir
+    #2 setup, fixed seed, GPU, out dir
     seed_all(0)
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     out = Path(args.out)
     out.mkdir(parents = True, exist_ok = True)
     cfg = {'k': args.k, 'alpha': args.alpha}
 
-    #data: training batches, and fixed held-out images with fixed messages
+    #3 Data: training batches, and fixed held-out images with fixed messages
     ds = CelebA64(args.data_root, n = args.n)
     loader = DataLoader(ds, batch_size = args.bs, shuffle = True, num_workers = args.workers, pin_memory = (dev == 'cuda'), drop_last = True)
     val = CelebA64(args.data_root, n = N_TRAIN + args.n_val, start = N_TRAIN)
@@ -88,11 +87,12 @@ def main():
         val_sets['gen'] = (x_gen, random_msg(args.n_val, args.k, generator = g).to(dev))
     print(f"{len(ds)} training images, held-out sets: {', '.join(f'{t} ({len(v[0])})' for t, v in val_sets.items())}")
 
+    #4 encoder, extractor and the optimizer that updates both
     E = Encoder(args.k, alpha = args.alpha).to(dev)
     W = Extractor(args.k).to(dev)
     opt = torch.optim.Adam(list(E.parameters()) + list(W.parameters()), lr = args.lr or 1e-3)
 
-    #resume from last checkpoint if it exists
+    #5 resume from last checkpoint if it exists
     start_epoch, step = 0, 0
     ckpt_path = out / "last.pt"
     if ckpt_path.exists() and not args.fresh:
@@ -101,7 +101,7 @@ def main():
         E.load_state_dict(ck['E']); W.load_state_dict(ck['W']); opt.load_state_dict(ck['opt'])
         start_epoch, step = ck['epoch'] + 1, ck['step']
         print(f"Resuming from {ckpt_path}, {start_epoch} epochs already done.")
-        # the optimizer state restores the saved learning rate; --lr replaces it (e.g. a 10x drop for the last epochs)
+        # the optimizer comes back with the saved learning rate, --lr replaces it (e.g. 10x lower for the last epochs)
         if args.lr is not None:
             for group in opt.param_groups:
                 group['lr'] = args.lr
@@ -111,6 +111,7 @@ def main():
         print(f"Nothing to do, already trained for {start_epoch} epochs, raise epochs or add --fresh to start again")
         return
 
+    #6 logs: one row every 100 steps in log.csv, one row per evaluation in log_eval.csv
     log = open(out / 'log.csv', 'a' if step > 0 else 'w', newline = '')
     log_eval = open(out / 'log_eval.csv', 'a' if step > 0 else 'w', newline = '')
     writer, writer_eval = csv.writer(log), csv.writer(log_eval)
@@ -118,6 +119,7 @@ def main():
         writer.writerow(['step', 'epoch', 'attack', 'loss', 'bit_acc', 'psnr'])
         writer_eval.writerow(['step', 'epoch'] + [f"{t}_{c}" for t in val_sets for c in EVAL_COLS])
 
+    # evaluates on every held-out set, logs and prints the results
     def run_eval(epoch):
         row = [step, epoch]
         for t, (xv, mv) in val_sets.items():
@@ -130,9 +132,10 @@ def main():
         log_eval.flush()
         return acc_real
 
+    #7 training loop
     acc_real = None
     for epoch in range(start_epoch, args.epochs):
-        # curriculum: identity only first, otherwise the bit accuracy often stays stuck at 50%
+        # identity only for the first epochs: with all the attacks from the start the bit accuracy often stays at 50%
         names = ['identity'] if epoch < args.warmup else args.attacks
         if epoch == args.warmup:
             print(f"epoch {epoch}: attacks on ({', '.join(names)})")
@@ -166,10 +169,10 @@ def main():
             if step % args.eval_every == 0:
                 acc_real = run_eval(epoch)
 
-        if step % args.eval_every != 0:  # otherwise already evaluated at this step
+        if step % args.eval_every != 0:  # end of epoch evaluation, unless it was just done
             acc_real = run_eval(epoch)
 
-        # x, x_w and the amplified difference 10*|x_w - x| for 8 held-out images
+        # grid of 8 held-out images: x, the watermarked x_w and the amplified difference 10*|x_w - x|
         xv, mv = val_sets['real'][0][:8], val_sets['real'][1][:8]
         E.eval()
         with torch.no_grad():

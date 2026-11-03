@@ -1,6 +1,4 @@
-# Tests for the HiDDeN encoder and extractor (step 1). Run from the repo root:
-#   python -m watermark.test_hidden            # unit tests, a few seconds on CPU
-#   python -m watermark.test_hidden --learn    # + short training on real CelebA, identity attack only (~10 min CPU)
+#run from the repo root: python -m watermark.test_hidden (a few seconds), add --learn for a short training (~10 min on CPU)
 import argparse
 import math
 import time
@@ -16,7 +14,7 @@ def test_shapes():
     xw = E(x, m)
     assert xw.shape == x.shape, xw.shape
     assert W(xw).shape == (4, K)
-    # global average pooling: W reads crops of any size
+    # thanks to the global average pooling W reads crops of any size
     for h, w in [(32, 32), (48, 40), (16, 64)]:
         assert W(torch.rand(2, 3, h, w)).shape == (2, K), (h, w)
 
@@ -29,7 +27,7 @@ def test_distortion_bound():
     xw = E(x, random_msg(8, K))
     assert (xw - x).abs().max() <= ALPHA + 1e-6
     assert xw.min() >= -1 and xw.max() <= 1
-    # |x_w - x| <= alpha everywhere, so PSNR >= 10 log10(4 / alpha^2) = 32.0 dB at alpha = 0.05
+    # each pixel moves by at most alpha so PSNR >= 10 log10(4/alpha^2), 32 dB for alpha = 0.05
     assert psnr(xw, x) >= 10*math.log10(4/ALPHA**2) - 1e-3
 
 
@@ -61,10 +59,9 @@ def test_helpers():
     assert abs(psnr(x + 0.02, x).item() - 40.0) < 1e-3  # MSE 4e-4 -> 10 log10(1e4)
 
 
-# Train E and W jointly for a few hundred steps on real images, identity attack only, and check that
-# W decodes fresh random messages hidden in held-out images (eval mode, so BatchNorm uses running stats).
-# On CPU this only shows the bits start getting through: full convergence takes far more steps (step 3, GPU).
-# clean_acc reads the same images without watermark against the same messages and must stay at chance.
+# trains E and W for a few hundred steps on real images (identity attack only) and checks that W reads
+# new random messages hidden in held-out images. On CPU it only shows that the bits start getting through,
+# the full training is train_hidden.py on GPU. 'clean' (same images without watermark) must stay at chance
 def test_learns(data_root, steps, bs, k, min_acc):
     from torch.utils.data import DataLoader
     from data import CelebA64
@@ -107,7 +104,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--learn', action = 'store_true')
     p.add_argument("--data_root", default = 'data/img_align_celeba')
-    # CPU defaults (about 10 min): k = 8 learns faster than 32; 400 steps reach about 0.65 held-out bit accuracy
+    # CPU defaults (about 10 min): k = 8 learns faster than 32, 400 steps give about 0.65 bit accuracy
     p.add_argument('--steps', type = int, default = 400)
     p.add_argument('--bs', type = int, default = 16)
     p.add_argument('--k', type = int, default = 8)

@@ -3,6 +3,11 @@ data/
 # training outputs: checkpoints, logs, sample grids
 runs/
 *.pt
+# Kaggle downloads and output archives
+*.zip
 # Python
 __pycache__/
 *.pyc
+.ipynb_checkpoints/
+# editors
+.vscode/
